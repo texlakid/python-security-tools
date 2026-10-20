@@ -1,6 +1,6 @@
 # 🐍 Python Security Tools
 
-Custom Python scripts I've written for pentesting, reconnaissance, and automation. Built and tested on Android (Termux + Kali NetHunter).
+Custom Python scripts I've written for pentesting, reconnaissance, and automation. Built and tested on Mobile devices (Termux + Kali NetHunter).
 
 ## Tools
 
