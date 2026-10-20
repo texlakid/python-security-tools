@@ -9,6 +9,7 @@ Custom Python scripts I've written for pentesting, reconnaissance, and automatio
 | `odoo_bruteforcer.py` | Threaded XML-RPC brute forcer for Odoo instances (authorized labs only) |
 | `subdomain_enum.py` | Multi-source subdomain enumeration (HackerTarget, CertSpotter, AlienVault) |
 | `crt_fetcher.py` | Robust crt.sh subdomain fetcher with retries (because crt.sh is unreliable) |
+| `link_scraper.py` | Extracts unique, absolute URLs from a target webpage for OSINT and recon |
 
 ## Installation
 
