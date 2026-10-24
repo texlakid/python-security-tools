@@ -10,7 +10,16 @@ Custom Python scripts I've written for pentesting, reconnaissance, and automatio
 | `subdomain_enum.py` | Multi-source subdomain enumeration (HackerTarget, CertSpotter, AlienVault) |
 | `crt_fetcher.py` | Robust crt.sh subdomain fetcher with retries (because crt.sh is unreliable) |
 | `link_scraper.py` | Extracts unique, absolute URLs from a target webpage for OSINT and recon |
-| `vuln_logger.py` | A lightweight SQLite-based CLI tool to log, track, and export penetration testing findings to Markdown |
+| ### Chain of Custody & Evidence Hashing
+
+The `vuln_logger.py` tool is built for professional engagements. It does not just log text; it enforces ★chain of custody★. 
+
+When you attach an evidence file (like an `nmap` output or a `headers.json` capture), the tool computes its SHA-256 hash and stores it in the SQLite database. 
+
+To verify that your evidence has not been altered or corrupted since capture, run:
+`python3 vuln_logger.py verify`
+
+If a single byte has changed, it will flag the file as `[TAMPERED]` and exit with code `1`. |
 
 ## Installation
 
