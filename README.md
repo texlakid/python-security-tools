@@ -10,7 +10,7 @@ Custom Python scripts I've written for pentesting, reconnaissance, and automatio
 | `subdomain_enum.py` | Multi-source subdomain enumeration (HackerTarget, CertSpotter, AlienVault) |
 | `crt_fetcher.py` | Robust crt.sh subdomain fetcher with retries (because crt.sh is unreliable) |
 | `link_scraper.py` | Extracts unique, absolute URLs from a target webpage for OSINT and recon |
-| `vuln_logger.py` | A SQLite database CLI tool to log and track pentest findings during an engagement. |
+| `vuln_logger.py` | A lightweight SQLite-based CLI tool to log, track, and export penetration testing findings to Markdown |
 
 ## Installation
 
