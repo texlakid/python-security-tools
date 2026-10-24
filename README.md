@@ -26,10 +26,13 @@ If a single byte has changed, it will flag the file as `[TAMPERED]` and exit wit
 ### `headers.py` — HTTP & TLS Fingerprinting
 A lightweight, single-request auditor for web applications. It evaluates the server's fingerprint, TLS configuration, missing security headers, and cookie flags without firing a scanner or crashing a mobile device.
 
-★Usage:★
+ ## Usage:
+
 ```bash
 python3 headers.py https://target.lab/ --insecure
 python3 headers.py https://target.lab/ --json > headers.json
+```
+
 
 ## Installation
 
