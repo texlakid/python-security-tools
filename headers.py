@@ -1,16 +1,24 @@
 #!/usr/bin/env python3
 """
 headers.py -- HTTP response header & TLS fingerprint auditor.
-AUTHORIZED LAB USE ONLY.
+Reports fingerprint, TLS posture, security-header coverage, and cookie flags.
 
-One GET + capped redirect chain. Reports fingerprint, TLS posture,
-security-header coverage, and cookie flag discipline.
+Built for lightweight, mobile-first reconnaissance and penetration testing.
+
+Author  : Alexander Anthony (Texla Kid)
+GitHub  : https://github.com/Texlakid
+Version : 1.1
+Date    : 2026-11-01
+
+WARNING:  Do not use against targets without 
+explicit, written authorization.
 
 Usage:
     python3 headers.py https://LAB_HOST/
     python3 headers.py https://LAB_HOST/ --json
     python3 headers.py http://10.10.10.10/ --insecure --timeout 8
 """
+
 import argparse
 import json
 import socket
@@ -21,8 +29,7 @@ import urllib.request
 from http.cookies import SimpleCookie
 from urllib.parse import urlparse
 
-UA = "headers-audit/1.0 (authorized-lab)"
-
+UA = "headers-audit/1.1 (Texla Kid)"
 
 SECURITY_HEADERS = {
     "Content-Security-Policy":        ("Medium",  "restricts script/style/connect origins; primary XSS mitigation"),
@@ -35,27 +42,20 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy":   ("Info",    "blocks cross-origin resource embedding"),
 }
 
-
 FINGERPRINT_HEADERS = ("Server", "X-Powered-By", "Via", "X-AspNet-Version",
                        "X-Generator", "X-Drupal-Cache", "X-Varnish")
 
 MAX_REDIRECTS = 5
 
-
 class Recorder(urllib.request.HTTPRedirectHandler):
-    """Follow redirects but keep the chain for the report."""
     chain = []
-
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         Recorder.chain.append((code, newurl))
         if len(Recorder.chain) > MAX_REDIRECTS:
-            raise urllib.error.HTTPError(
-                newurl, code, f"redirect cap {MAX_REDIRECTS} exceeded", headers, fp)
+            raise urllib.error.HTTPError(newurl, code, f"redirect cap {MAX_REDIRECTS} exceeded", headers, fp)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
-
 def tls_info(host, port, insecure, timeout):
-    """Best-effort TLS handshake. Returns dict; never raises."""
     out = {"enabled": False}
     ctx = ssl.create_default_context()
     if insecure:
@@ -67,7 +67,6 @@ def tls_info(host, port, insecure, timeout):
                 out["enabled"] = True
                 out["protocol"] = tls.version()
                 out["cipher"] = tls.cipher()[0] if tls.cipher() else None
-             
                 cert = tls.getpeercert() or {}
                 if cert:
                     subj = {k: v for tup in cert.get("subject", ()) for k, v in tup}
@@ -77,15 +76,11 @@ def tls_info(host, port, insecure, timeout):
                     out["not_after"] = cert.get("notAfter")
                 else:
                     out["note"] = "cert not verified (insecure mode or invalid chain)"
-    except ssl.SSLCertVerificationError as exc:
-        out["error"] = f"cert verification failed: {exc.verify_message}"
-    except (ssl.SSLError, socket.timeout, OSError) as exc:
+    except Exception as exc:
         out["error"] = str(exc)
     return out
 
-
 def audit_cookies(resp):
-    """Flag discipline: Secure, HttpOnly, SameSite."""
     cookies = []
     for raw in resp.headers.get_all("Set-Cookie") or []:
         jar = SimpleCookie()
@@ -103,7 +98,6 @@ def audit_cookies(resp):
             })
     return cookies
 
-
 def run(url, insecure, timeout, follow):
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https"):
@@ -118,14 +112,12 @@ def run(url, insecure, timeout, follow):
         ctx.verify_mode = ssl.CERT_NONE
 
     if follow:
-        opener = urllib.request.build_opener(
-            urllib.request.HTTPSHandler(context=ctx), Recorder())
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), Recorder())
     else:
         class NoRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, *a, **k):
                 return None
-        opener = urllib.request.build_opener(
-            urllib.request.HTTPSHandler(context=ctx), NoRedirect())
+        opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), NoRedirect())
 
     req = urllib.request.Request(url, headers={"User-Agent": UA}, method="GET")
     try:
@@ -135,13 +127,11 @@ def run(url, insecure, timeout, follow):
         status, headers, body = exc.code, exc.headers, b""
     except urllib.error.URLError as exc:
         sys.exit(f"[!] request failed: {exc.reason}")
-    except socket.timeout:
-        sys.exit(f"[!] timeout after {timeout}s")
 
     present = {h: headers.get(h) for h in SECURITY_HEADERS if headers.get(h)}
     missing = {h: v for h, v in SECURITY_HEADERS.items() if h not in present}
 
-    report = {
+    return {
         "target": url,
         "status": status,
         "redirect_chain": [{"code": c, "to": u} for c, u in Recorder.chain],
@@ -151,8 +141,6 @@ def run(url, insecure, timeout, follow):
         "cookies": audit_cookies(resp),
         "tls": tls_info(host, port, insecure, timeout) if parsed.scheme == "https" else {"enabled": False},
     }
-    return report
-
 
 def render(r):
     print(f"\nTARGET   {r['target']}")
@@ -200,16 +188,12 @@ def render(r):
                 print(f"  [!] {c['raw'][:80]}")
                 continue
             flags = []
-            if not c["secure"]:
-                flags.append("no-Secure")
-            if not c["httponly"]:
-                flags.append("no-HttpOnly")
-            if not c["samesite"]:
-                flags.append("no-SameSite")
+            if not c["secure"]: flags.append("no-Secure")
+            if not c["httponly"]: flags.append("no-HttpOnly")
+            if not c["samesite"]: flags.append("no-SameSite")
             tag = " ; ".join(flags) if flags else "ok"
             print(f"  {c['name']:<24} {tag}")
     print()
-
 
 def main():
     ap = argparse.ArgumentParser(description="HTTP header & TLS auditor (lab only)")
@@ -225,7 +209,6 @@ def main():
         print(json.dumps(report, indent=2))
     else:
         render(report)
-
 
 if __name__ == "__main__":
     main()
