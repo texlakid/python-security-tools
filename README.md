@@ -28,22 +28,28 @@ Built for professional engagements. It does not just log text; it enforces **cha
 *   **Automated Markdown Reports:** Generates professional reports filtered by specific engagement IDs.
 
 **Usage:**
+
+Initialize DB
 ```bash
-# Initialize DB
 python3 vuln_logger.py init
-
-# Create an engagement
+```
+ Create an engagement
+```bash
 python3 vuln_logger.py engagement add --name "Client-X" --scope "192.168.1.*"
-
-# Log a finding
+```
+ Log a finding
+```bash
 python3 vuln_logger.py add --engagement 1 --host 192.168.1.5 --phase Exploit --title "SMBv1 Enabled" --severity High --evidence-file ./nmap.txt
-
-# Verify integrity
+```
+ Verify integrity
+```bash
 python3 vuln_logger.py verify
-
-# Generate Report
+```
+ Generate Report
+```bash
 python3 vuln_logger.py report -o client_report.md --engagement 1
 ```
+
 headers.py — HTTP & TLS Fingerprinting
 
 A lightweight, single-request auditor for web applications. It evaluates the server's fingerprint, TLS configuration, missing security headers, and cookie flags without firing a heavy scanner or exhausting mobile device RAM.
