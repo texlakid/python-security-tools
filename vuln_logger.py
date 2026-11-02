@@ -16,6 +16,9 @@ Author  : Alexander Anthony (Texla Kid)
 GitHub  : https://github.com/Texlakid
 Version : 3.0
 Date    : 2026-10-31
+
+WARNING:Do not use against targets without 
+explicit, written authorization.
 """
 
 import argparse
