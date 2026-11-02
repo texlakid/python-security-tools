@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-vuln_logger.py v2 -- SQLite findings DB with evidence hashing & scope enforcement.
+vuln_logger.py v3.0 -- SQLite findings DB with evidence hashing & scope enforcement.
 
-New in v2:
-  * engagements table with scope globs; add/import refuse out-of-scope hosts
-  * evidence-as-file: --evidence-file stores absolute path + SHA-256
-  * verify: recompute hashes, report OK / TAMPERED / MISSING, exit 1 on drift
-  * import: consume headers.py --json output, one finding per missing header,
-            deduplicated on (host, title, evidence_sha256)
+Features:
+  * Engagements table with scope globs; add/import refuse out-of-scope hosts.
+  * Evidence-as-file: --evidence-file stores absolute path + SHA-256.
+  * Verify: recompute hashes, report OK / TAMPERED / MISSING, exit 1 on drift.
+  * Import: consume headers.py --json output, one finding per missing header.
+  * JSON Output: export findings in JSON format for tool chaining.
+  * WAL Mode: SQLite Write-Ahead Logging enabled for concurrent read/writes.
+  
+Built for lightweight, mobile-first reconnaissance and  penetration testing.
 
-Usage:
-    python3 vuln_logger.py init
-    python3 vuln_logger.py engagement add --name thm-acme --scope "10.10.10.*,*.acme.lab"
-    python3 vuln_logger.py add --engagement 1 --host 10.10.10.10 --phase Recon \
-        --title "Exposed .git" --severity High --evidence-file ./git.txt
-    python3 vuln_logger.py import headers.json --engagement 1
-    python3 vuln_logger.py verify
-    python3 vuln_logger.py report -o report.md
+Author  : Alexander Anthony (Texla Kid)
+GitHub  : https://github.com/Texlakid
+Version : 3.0
+Date    : 2026-10-31
 """
 
 import argparse
@@ -30,7 +29,15 @@ import stat
 import sys
 from urllib.parse import urlparse
 
-DB_FILE = "findings.db"
+
+C_GREEN = '\033[92m'
+C_RED = '\033[91m'
+C_YELLOW = '\033[93m'
+C_CYAN = '\033[96m'
+C_RESET = '\033[0m'
+
+DATA_DIR = "texlakit_data"
+DB_FILE = os.path.join(DATA_DIR, "findings.db")
 SEVERITIES = ("Critical", "High", "Medium", "Low", "Info")
 HASH_CHUNK = 65536
 
@@ -60,20 +67,20 @@ CREATE INDEX IF NOT EXISTS idx_findings_eng    ON findings(engagement_id);
 CREATE INDEX IF NOT EXISTS idx_findings_dedupe ON findings(host, title, evidence_sha256);
 """
 
-
 # ---------------------------------------------------------------- utilities
 
 def now_utc() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
+def ensure_data_dir():
+    if not os.path.exists(DATA_DIR):
+        os.makedirs(DATA_DIR)
+        try: os.chmod(DATA_DIR, stat.S_IRWXU)
+        except OSError: pass
 
 def lock_down(path: str) -> None:
-    try:
-        os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:
-     
-        pass
-
+    try: os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
+    except OSError: pass
 
 def sha256_file(path: str) -> str:
     h = hashlib.sha256()
@@ -82,63 +89,59 @@ def sha256_file(path: str) -> str:
             h.update(block)
     return h.hexdigest()
 
-
 def open_db() -> sqlite3.Connection:
     if not os.path.exists(DB_FILE):
-        sys.exit(f"[!] {DB_FILE} not found. Run: {sys.argv[0]} init")
+        sys.exit(f"{C_RED}[!] {DB_FILE} not found. Run: {sys.argv[0]} init{C_RESET}")
     try:
         con = sqlite3.connect(DB_FILE)
+        con.execute("PRAGMA journal_mode=WAL;")
         row = con.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='findings'"
         ).fetchone()
     except sqlite3.DatabaseError as exc:
-        sys.exit(f"[!] cannot open {DB_FILE}: {exc}")
+        sys.exit(f"{C_RED}[!] cannot open {DB_FILE}: {exc}{C_RESET}")
     if row is None:
         con.close()
-        sys.exit(f"[!] {DB_FILE} exists but is not initialized. Run: {sys.argv[0]} init")
+        sys.exit(f"{C_RED}[!] {DB_FILE} exists but is not initialized. Run: {sys.argv[0]} init{C_RESET}")
     return con
-
 
 # ---------------------------------------------------------------- schema
 
 def init_db() -> None:
+    ensure_data_dir()
     existed = os.path.exists(DB_FILE)
     con = sqlite3.connect(DB_FILE)
+    con.execute("PRAGMA journal_mode=WAL;")
     try:
         con.executescript(SCHEMA)
-     
         cols = {r[1] for r in con.execute("PRAGMA table_info(findings)")}
         for col, ddl in (("engagement_id", "INTEGER"),
                          ("evidence_path", "TEXT"),
                          ("evidence_sha256", "TEXT")):
             if col not in cols:
-              
                 con.execute(f"ALTER TABLE findings ADD COLUMN {col} {ddl}")
-                print(f"[*] migrated: added findings.{col}")
+                print(f"{C_YELLOW}[*] migrated: added findings.{col}{C_RESET}")
         con.commit()
     finally:
         con.close()
     lock_down(DB_FILE)
-    print(f"[+] Database {'updated' if existed else 'created'}: {DB_FILE}")
-
+    print(f"{C_GREEN}[+] Database {'updated' if existed else 'created'}: {DB_FILE}{C_RESET}")
 
 # ---------------------------------------------------------------- scope
 
 def scope_globs(con, engagement_id: int):
-    row = con.execute("SELECT scope FROM engagements WHERE id=?",
-                      (engagement_id,)).fetchone()
+    row = con.execute("SELECT scope FROM engagements WHERE id=?", (engagement_id,)).fetchone()
     if row is None:
-        sys.exit(f"[!] no engagement with id={engagement_id}")
-    return [g.strip() for g in row[0].split(",") if g.strip()]
-
+        sys.exit(f"{C_RED}[!] no engagement with id={engagement_id}{C_RESET}")
+    return [g.strip().lower() for g in row[0].split(",") if g.strip()]
 
 def enforce_scope(con, engagement_id: int, host: str) -> None:
+    host = host.strip().lower()
     globs = scope_globs(con, engagement_id)
     if not any(fnmatch.fnmatch(host, g) for g in globs):
-        sys.exit(f"[!] host {host!r} is OUT OF SCOPE for engagement {engagement_id}\n"
+        sys.exit(f"{C_RED}[!] host {host!r} is OUT OF SCOPE for engagement {engagement_id}\n"
                  f"    scope: {globs}\n"
-                 f"    refusal is deliberate. Fix scope or fix target.")
-
+                 f"    refusal is deliberate. Fix scope or fix target.{C_RESET}")
 
 def add_engagement(con, name: str, scope: str) -> None:
     try:
@@ -148,31 +151,30 @@ def add_engagement(con, name: str, scope: str) -> None:
         )
         con.commit()
     except sqlite3.IntegrityError:
-        sys.exit(f"[!] engagement {name!r} already exists")
-    print(f"[+] Engagement created: {name}  scope={scope}")
-
+        sys.exit(f"{C_RED}[!] engagement {name!r} already exists{C_RESET}")
+    print(f"{C_GREEN}[+] Engagement created: {name}  scope={scope}{C_RESET}")
 
 # ---------------------------------------------------------------- findings
 
 def resolve_evidence(inline, path):
-    """Return (text, abs_path, sha256). Hash is taken exactly once, here."""
     if path:
         abs_path = os.path.abspath(path)
         if not os.path.isfile(abs_path):
-            sys.exit(f"[!] evidence file not found: {abs_path}")
+            sys.exit(f"{C_RED}[!] evidence file not found: {abs_path}{C_RESET}")
         try:
             digest = sha256_file(abs_path)
         except OSError as exc:
-            sys.exit(f"[!] cannot hash {abs_path}: {exc}")
+            sys.exit(f"{C_RED}[!] cannot hash {abs_path}: {exc}{C_RESET}")
         return (inline or f"see {abs_path}", abs_path, digest)
     return (inline or "", None, None)
-
 
 def add_finding(con, host, phase, title, severity, evidence="",
                 evidence_file=None, remediation="", engagement_id=None):
     sev = severity.strip().title()
     if sev not in SEVERITIES:
-        sys.exit(f"[!] severity must be one of {SEVERITIES}")
+        sys.exit(f"{C_RED}[!] severity must be one of {SEVERITIES}{C_RESET}")
+    
+    host = host.strip().lower() 
     if engagement_id is not None:
         enforce_scope(con, engagement_id, host)
 
@@ -186,31 +188,38 @@ def add_finding(con, host, phase, title, severity, evidence="",
     )
     con.commit()
     tail = f"  [sha256 {digest[:12]}...]" if digest else ""
-    print(f"[+] Logged: [{sev.upper()}] {title} on {host}{tail}")
+    color = C_RED if sev in ("Critical", "High") else C_YELLOW if sev == "Medium" else C_CYAN
+    print(f"{C_GREEN}[+] Logged:{C_RESET} {color}[{sev.upper()}]{C_RESET} {title} on {host}{tail}")
 
-
-def list_findings(con, host=None, severity=None):
+def list_findings(con, host=None, severity=None, as_json=False):
     q = ("SELECT id, ts, host, phase, title, severity,"
          " substr(evidence_sha256,1,12) FROM findings WHERE 1=1")
     params = []
     if host:
-        q += " AND host = ?"; params.append(host)
+        q += " AND host = ?"; params.append(host.strip().lower())
     if severity:
         q += " AND severity = ?"; params.append(severity.strip().title())
     q += " ORDER BY ts DESC"
     rows = con.execute(q, params).fetchall()
+    
     if not rows:
-        print("[-] No findings match.")
+        print(f"{C_YELLOW}[-] No findings match.{C_RESET}")
         return
-    print()
-    print(f"{'ID':>4} | {'TIMESTAMP (UTC)':<20} | {'HOST':<15} | {'SEV':<8} | {'SHA256':<12} | TITLE")
+
+    if as_json:
+        keys = ["id", "timestamp", "host", "phase", "title", "severity", "sha256"]
+        data = [dict(zip(keys, row)) for row in rows]
+        print(json.dumps(data, indent=4))
+        return
+
+    print(f"\n{C_CYAN}{'ID':>4} | {'TIMESTAMP (UTC)':<20} | {'HOST':<15} | {'SEV':<8} | {'SHA256':<12} | TITLE{C_RESET}")
     print("-" * 110)
     for rid, ts, h, phase, title, sev, sha in rows:
         short = title if len(title) <= 36 else title[:33] + "..."
-        print(f"{rid:>4} | {ts[:19]:<20} | {h:<15} | {sev.upper():<8} | "
+        color = C_RED if sev in ("Critical", "High") else C_YELLOW if sev == "Medium" else C_CYAN
+        print(f"{rid:>4} | {ts[:19]:<20} | {h:<15} | {color}{sev.upper():<8}{C_RESET} | "
               f"{(sha or '-'):<12} | {short}")
     print()
-
 
 def show_finding(con, finding_id: int):
     row = con.execute(
@@ -219,21 +228,20 @@ def show_finding(con, finding_id: int):
         " FROM findings WHERE id = ?", (finding_id,),
     ).fetchone()
     if row is None:
-        print(f"[-] no finding with id={finding_id}")
+        print(f"{C_RED}[-] no finding with id={finding_id}{C_RESET}")
         return
     (rid, eng, ts, h, phase, title, sev, ev, path, sha, rem) = row
-    print(f"ID          : {rid}")
-    print(f"Engagement  : {eng if eng is not None else '-'}")
-    print(f"Timestamp   : {ts}")
-    print(f"Host        : {h}")
-    print(f"Phase       : {phase}")
-    print(f"Severity    : {sev}")
-    print(f"Title       : {title}")
-    print(f"Evidence    : {ev or '(none)'}")
-    print(f"Ev. path    : {path or '(inline)'}")
-    print(f"Ev. sha256  : {sha or '(unhashed)'}")
-    print(f"Remediation : {rem or '(none)'}")
-
+    print(f"{C_CYAN}ID          :{C_RESET} {rid}")
+    print(f"{C_CYAN}Engagement  :{C_RESET} {eng if eng is not None else '-'}")
+    print(f"{C_CYAN}Timestamp   :{C_RESET} {ts}")
+    print(f"{C_CYAN}Host        :{C_RESET} {h}")
+    print(f"{C_CYAN}Phase       :{C_RESET} {phase}")
+    print(f"{C_CYAN}Severity    :{C_RESET} {sev}")
+    print(f"{C_CYAN}Title       :{C_RESET} {title}")
+    print(f"{C_CYAN}Evidence    :{C_RESET} {ev or '(none)'}")
+    print(f"{C_CYAN}Ev. path    :{C_RESET} {path or '(inline)'}")
+    print(f"{C_CYAN}Ev. sha256  :{C_RESET} {sha or '(unhashed)'}")
+    print(f"{C_CYAN}Remediation :{C_RESET} {rem or '(none)'}")
 
 # ---------------------------------------------------------------- verify
 
@@ -243,53 +251,55 @@ def verify(con) -> int:
         " FROM findings WHERE evidence_sha256 IS NOT NULL ORDER BY id"
     ).fetchall()
     if not rows:
-        print("[*] no hashed evidence to verify")
+        print(f"{C_YELLOW}[*] no hashed evidence to verify{C_RESET}")
         return 0
     problems = 0
     for rid, host, title, path, expected in rows:
         if not path or not os.path.isfile(path):
-            print(f"[MISSING ] id={rid:<4} {path or '(no path)'}  <- {title}")
+            print(f"{C_RED}[MISSING ] id={rid:<4} {path or '(no path)'}  <- {title}{C_RESET}")
             problems += 1
             continue
         try:
             actual = sha256_file(path)
         except OSError as exc:
-            print(f"[ERROR   ] id={rid:<4} {path}: {exc}")
+            print(f"{C_RED}[ERROR   ] id={rid:<4} {path}: {exc}{C_RESET}")
             problems += 1
             continue
         if actual == expected:
-            print(f"[OK      ] id={rid:<4} {path}")
+            print(f"{C_GREEN}[OK      ] id={rid:<4} {path}{C_RESET}")
         else:
-            print(f"[TAMPERED] id={rid:<4} {path}")
+            print(f"{C_RED}[TAMPERED] id={rid:<4} {path}{C_RESET}")
             print(f"           expected {expected}")
             print(f"           actual   {actual}")
             problems += 1
     print(f"\n{len(rows)} hashed record(s), {problems} problem(s)")
     return 1 if problems else 0
 
-
 # ---------------------------------------------------------------- import
 
-def import_headers(con, json_path: str, engagement_id: int,
-                   phase: str = "Recon") -> int:
+def import_headers(con, json_path: str, engagement_id: int, phase: str = "Recon") -> int:
     abs_path = os.path.abspath(json_path)
     if not os.path.isfile(abs_path):
-        sys.exit(f"[!] file not found: {abs_path}")
+        sys.exit(f"{C_RED}[!] file not found: {abs_path}{C_RESET}")
     try:
         with open(abs_path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
     except (OSError, json.JSONDecodeError) as exc:
-        sys.exit(f"[!] cannot parse {abs_path}: {exc}")
+        sys.exit(f"{C_RED}[!] cannot parse {abs_path}: {exc}{C_RESET}")
 
     host = urlparse(data.get("target", "")).hostname
     if not host:
-        sys.exit("[!] JSON has no parseable 'target' URL")
+        sys.exit(f"{C_RED}[!] JSON has no parseable 'target' URL{C_RESET}")
+    
+    host = host.strip().lower()
     enforce_scope(con, engagement_id, host)
 
     digest = sha256_file(abs_path)
-    missing = data.get("security_missing") or {}
+    
+    missing = data.get("security_missing") or data.get("missing") or {}
+    
     if not missing:
-        print("[*] report lists no missing security headers -- nothing to import")
+        print(f"{C_YELLOW}[*] report lists no missing security headers -- nothing to import{C_RESET}")
         return 0
 
     inserted = skipped = 0
@@ -315,34 +325,48 @@ def import_headers(con, json_path: str, engagement_id: int,
         )
         inserted += 1
     con.commit()
-    print(f"[+] imported {inserted} finding(s), skipped {skipped} duplicate(s)")
+    print(f"{C_GREEN}[+] imported {inserted} finding(s), skipped {skipped} duplicate(s){C_RESET}")
     return 0
-
 
 # ---------------------------------------------------------------- report
 
-def to_markdown(con, out_path: str) -> None:
-    rows = con.execute(
-        "SELECT id, ts, host, phase, title, severity, evidence, evidence_path,"
-        "       evidence_sha256, remediation FROM findings ORDER BY"
-        " CASE severity WHEN 'Critical' THEN 0 WHEN 'High' THEN 1"
-        "  WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 4 END, ts DESC"
-    ).fetchall()
+def to_markdown(con, out_path: str, engagement_id: int = None) -> None:
+    q = ("SELECT id, ts, host, phase, title, severity, evidence, evidence_path,"
+         "       evidence_sha256, remediation, engagement_id FROM findings")
+    params = []
+    
+    
+    if engagement_id:
+        q += " WHERE engagement_id = ?"
+        params.append(engagement_id)
+        
+    q += (" ORDER BY CASE severity WHEN 'Critical' THEN 0 WHEN 'High' THEN 1"
+          "  WHEN 'Medium' THEN 2 WHEN 'Low' THEN 3 ELSE 4 END, ts DESC")
+          
+    rows = con.execute(q, params).fetchall()
     if not rows:
-        print("[-] nothing to export")
+        print(f"{C_YELLOW}[-] nothing to export{C_RESET}")
         return
+        
     counts = {s: 0 for s in SEVERITIES}
     for r in rows:
         counts[r[5]] = counts.get(r[5], 0) + 1
 
-    out = ["# Engagement Findings", "", f"_Generated: {now_utc()}_", "",
-           "## Summary", "", "| Severity | Count |", "|----------|-------|"]
+    
+    if engagement_id:
+        eng_row = con.execute("SELECT name FROM engagements WHERE id=?", (engagement_id,)).fetchone()
+        eng_name = eng_row[0] if eng_row else f"Engagement_{engagement_id}"
+    else:
+        eng_name = "Global Findings (All Engagements)"
+
+    out = [f"# Penetration Test Findings: {eng_name}", "", f"_Generated: {now_utc()}_", "",
+           "## Executive Summary", "", "| Severity | Count |", "|----------|-------|"]
     for s in SEVERITIES:
         if counts[s]:
-            out.append(f"| {s} | {counts[s]} |")
+            out.append(f"| **{s}** | {counts[s]} |")
     out.append("")
 
-    for rid, ts, h, phase, title, sev, ev, path, sha, rem in rows:
+    for rid, ts, h, phase, title, sev, ev, path, sha, rem, eng in rows:
         out += [f"## [{sev}] {title}", "",
                 f"- **ID**: {rid}",
                 f"- **Host**: `{h}`",
@@ -352,7 +376,8 @@ def to_markdown(con, out_path: str) -> None:
                 f"- **Evidence SHA-256**: `{sha}`" if sha else "- **Evidence SHA-256**: (unhashed)",
                 ""]
         if ev:
-            out += ["**Evidence**", "", "```", ev, "```", ""]
+          
+            out += ["**Evidence**", "", "~~~text", ev, "~~~", ""]
         if rem:
             out += ["**Remediation**", "", rem, ""]
 
@@ -360,14 +385,13 @@ def to_markdown(con, out_path: str) -> None:
         with open(out_path, "w", encoding="utf-8") as fh:
             fh.write("\n".join(out))
     except OSError as exc:
-        sys.exit(f"[!] cannot write {out_path}: {exc}")
-    print(f"[+] Report written: {out_path} ({len(rows)} findings)")
-
+        sys.exit(f"{C_RED}[!] cannot write {out_path}: {exc}{C_RESET}")
+    print(f"{C_GREEN}[+] Report written: {out_path} ({len(rows)} findings){C_RESET}")
 
 # ---------------------------------------------------------------- CLI
 
 def build_parser():
-    p = argparse.ArgumentParser(description="Pentest finding logger v2")
+    p = argparse.ArgumentParser(description="Pentest finding logger v3.2 (SHADOW EDITION)")
     sub = p.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init", help="initialize or migrate the database")
@@ -393,6 +417,7 @@ def build_parser():
     l = sub.add_parser("list", help="list findings")
     l.add_argument("--host")
     l.add_argument("--severity", choices=SEVERITIES)
+    l.add_argument("--json", action="store_true", help="Output in JSON format")
 
     s = sub.add_parser("show", help="show one finding")
     s.add_argument("--id", type=int, required=True)
@@ -406,9 +431,9 @@ def build_parser():
 
     r = sub.add_parser("report", help="export Markdown report")
     r.add_argument("-o", "--output", default="report.md")
+    r.add_argument("--engagement", type=int, help="Filter report by engagement ID")
 
     return p
-
 
 def main() -> int:
     args = build_parser().parse_args()
@@ -425,7 +450,7 @@ def main() -> int:
             else:
                 for rid, name, scope, ts in con.execute(
                         "SELECT id, name, scope, created_ts FROM engagements ORDER BY id"):
-                    print(f"  {rid:>3}  {name:<20} {scope}   ({ts})")
+                    print(f"  {C_CYAN}{rid:>3}{C_RESET}  {name:<20} {scope}   ({ts})")
         elif args.command == "add":
             add_finding(con, args.host, args.phase, args.title, args.severity,
                         evidence=args.evidence,
@@ -433,7 +458,7 @@ def main() -> int:
                         remediation=args.remediation,
                         engagement_id=args.engagement)
         elif args.command == "list":
-            list_findings(con, args.host, args.severity)
+            list_findings(con, args.host, args.severity, args.json)
         elif args.command == "show":
             show_finding(con, args.id)
         elif args.command == "verify":
@@ -441,14 +466,13 @@ def main() -> int:
         elif args.command == "import":
             return import_headers(con, args.json_path, args.engagement, args.phase)
         elif args.command == "report":
-            to_markdown(con, args.output)
+            to_markdown(con, args.output, args.engagement)
     except sqlite3.OperationalError as exc:
-        print(f"[!] database error: {exc}", file=sys.stderr)
+        print(f"{C_RED}[!] database error: {exc}{C_RESET}", file=sys.stderr)
         return 1
     finally:
         con.close()
     return 0
-
 
 if __name__ == "__main__":
     sys.exit(main())
