@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-vuln_logger.py v3.0 -- SQLite findings DB with evidence hashing & scope enforcement.
+vuln_logger.py v3.2 -- SQLite findings DB with evidence hashing & scope enforcement.
 
 Features:
   * Engagements table with scope globs; add/import refuse out-of-scope hosts.
