@@ -1,9 +1,16 @@
-*.db
-*.db-journal
-*.db-wal
-*.db-shm
+# Ignore the local database and data folders
+texlakit_data/
 findings.db
-headers.json
-report.md
-evidence.txt
+*.db
+*.sqlite3
+
+# Ignore Python cache
 __pycache__/
+*.pyc
+
+# Ignore output files
+*.txt
+!requirements.txt
+*.md
+!README.md
+*.json
