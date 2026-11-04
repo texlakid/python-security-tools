@@ -14,7 +14,7 @@ Built for lightweight, mobile-first reconnaissance and  penetration testing.
 
 Author  : Alexander Anthony (Texla Kid)
 GitHub  : https://github.com/Texlakid
-Version : 3.0
+Version : 3.2
 Date    : 2026-10-31
 
 WARNING:Do not use against targets without 
